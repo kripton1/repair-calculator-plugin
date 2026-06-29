@@ -239,7 +239,7 @@ class BM_Parts_API {
 
 | Функционал | Описание | Статус |
 |-----------|----------|--------|
-| Поиск запчастей | 🔵 Разработка | → [01-search-part-by-name.md](./endpoints/01-search-part-by-name.md) |
+| Поиск запчастей | `GET /search/products` | → [01-search-part-by-name.md](./endpoints/01-search-part-by-name.md) |
 | Создание корзин | ⏳ Этап 2 | |
 | Резервирование | ⏳ Этап 3 | |
 | Отгрузка товара | ⏳ Этап 4 | |
