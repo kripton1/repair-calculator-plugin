@@ -1,5 +1,7 @@
 # Эндпоинт: Поиск запчасти по названию
 
+> Источник: [developer.bm.parts/api/v2/overview.html](https://developer.bm.parts/api/v2/overview.html)
+
 ## Назначение
 
 Поиск запчастей по текстовому запросу (название, артикул, OEM-номер). Это первый и основной эндпоинт для интеграции — пользователь вводит название детали, плагин находит совпадения с ценами и наличием.
@@ -10,14 +12,26 @@
 POST https://api.bm.parts/v2/search
 ```
 
+📌 **Уточнить:** Точный путь эндпоинта поиска. Возможные варианты:
+- `POST /v2/search`
+- `POST /v2/parts/search`
+- `POST /v2/search/parts`
+
 ## Заголовки (Headers)
 
 ```
 Content-Type: application/json
-Authorization: Bearer {api_key}
+Authorization: {api_key}
+User-Agent: RepairCalculatorWP/1.0
+Accept-Language: ru
 ```
 
-📌 **Уточнить формат авторизации у BM Parts.**
+| Заголовок | Обязательно | Описание |
+|-----------|-------------|----------|
+| `Authorization` | ✅ | API-ключ **без префикса Bearer** (формат: `Authorization: API-КЛЮЧ`) |
+| `User-Agent` | ✅ | **Обязателен!** Без него — 403 Forbidden |
+| `Accept-Language` | ❌ | `ru` или `uk` (по умолчанию: `uk`) |
+| `Content-Type` | ✅ | `application/json` |
 
 ## Тело запроса (Request Body)
 
@@ -35,11 +49,9 @@ Authorization: Bearer {api_key}
 | Поле | Тип | Обязательно | Описание |
 |------|-----|-------------|----------|
 | `query` | string | ✅ | Поисковый запрос (название детали, артикул, OEM) |
-| `language_id` | integer | ❌ | ID языка ответа. 1 = українська, 2 = русский, 3 = english. По умолчанию: 1 |
+| `language_id` | integer | ❌ | ID языка ответа. 📌 Уточнить формат |
 | `page` | integer | ❌ | Номер страницы. По умолчанию: 1 |
-| `per_page` | integer | ❌ | Количество результатов на странице. По умолчанию: 20, макс: 100 |
-
-📌 **Уточнить:** Точные значения `language_id` и лимиты.
+| `per_page` | integer | ❌ | Количество результатов на странице. По умолчанию: 30, макс: 100 |
 
 ### Примеры запросов
 
@@ -131,16 +143,21 @@ Authorization: Bearer {api_key}
 | Код | Ответ | Описание |
 |-----|-------|----------|
 | 400 | `{ "success": false, "error": "Invalid query parameter" }` | Невалидный запрос |
-| 401 | `{ "success": false, "error": "Unauthorized" }` | Невалидный API-ключ |
-| 403 | `{ "message": "Превышен лимит запросов API для ..." }` | Rate limit — смотреть `X-RateLimit-Reset` |
-| 429 | `{ "success": false, "error": "Rate limit exceeded" }` | Лимит запросов |
+| 401/404 | `{ "message": "..." }` | Неавторизован (API может возвращать 404 вместо 403) |
+| 403 | `{ "message": "Превышен лимит запросов API для ..." }` | Rate limit или отсутствует User-Agent |
 | 500 | `{ "success": false, "error": "Internal server error" }` | Ошибка сервера |
 
-### Rate Limit в реальном времени
+### Rate Limit — заголовки ответа
+
+```
+X-RateLimit-Limit: 10000
+X-RateLimit-Remaining: 4987
+X-RateLimit-Reset: 1350085394
+```
 
 ```php
-// Извлечение лимитов из заголовков ответа
-$headers = wp_remote_retrieve_headers($response);
+// Мониторинг лимитов
+$headers   = wp_remote_retrieve_headers($response);
 $remaining = $headers['x-ratelimit-remaining'] ?? null;
 $reset     = $headers['x-ratelimit-reset'] ?? null;
 
@@ -169,7 +186,7 @@ class BM_Parts_API {
     public function search_parts(
         string $query,
         int $page = 1,
-        int $perPage = 20
+        int $perPage = 30
     ): array {
         $cache_key = 'bmparts_search_' . md5($query . $page . $perPage);
         $cached = get_transient($cache_key);
@@ -178,14 +195,12 @@ class BM_Parts_API {
             return $cached;
         }
 
-        $data = $this->request('POST', 'search', [
-            'query'       => sanitize_text_field($query),
-            'language_id' => (int) get_option('bmparts_language_id', 1),
-            'page'        => $page,
-            'per_page'    => min($perPage, 100),
+        $data = $this->request('POST', 'v2/search', [
+            'query'    => sanitize_text_field($query),
+            'page'     => $page,
+            'per_page' => min($perPage, 100),
         ]);
 
-        // Кэшируем на 1 час
         set_transient($cache_key, $data, HOUR_IN_SECONDS);
 
         return $data;
@@ -196,12 +211,11 @@ class BM_Parts_API {
 ### WP REST API: Прокси-эндпоинт
 
 ```php
-// Регистрация REST API маршрута
 add_action('rest_api_init', function () {
     register_rest_route('repair-calculator/v1', '/search', [
         'methods'             => 'POST',
         'callback'            => 'rc_search_parts',
-        'permission_callback' => '__return_true', // Публичный доступ
+        'permission_callback' => '__return_true',
         'args' => [
             'query' => [
                 'required'          => true,
@@ -217,7 +231,7 @@ add_action('rest_api_init', function () {
 function rc_search_parts(WP_REST_Request $request): WP_REST_Response {
     $query    = $request->get_param('query');
     $page     = (int) $request->get_param('page') ?: 1;
-    $per_page = (int) $request->get_param('per_page') ?: 20;
+    $per_page = (int) $request->get_param('per_page') ?: 30;
 
     $api = new BM_Parts_API();
 
@@ -236,14 +250,11 @@ function rc_search_parts(WP_REST_Request $request): WP_REST_Response {
 ### JavaScript: Фронтенд-вызов
 
 ```javascript
-// assets/js/calculator.js
-
 class RepairCalculator {
     constructor() {
         this.searchInput = document.getElementById('rc-search-input');
         this.resultsContainer = document.getElementById('rc-results');
         this.debounceTimer = null;
-
         this.init();
     }
 
@@ -252,7 +263,7 @@ class RepairCalculator {
             clearTimeout(this.debounceTimer);
             this.debounceTimer = setTimeout(() => {
                 this.search(e.target.value);
-            }, 500); // debounce 500ms
+            }, 500);
         });
     }
 
@@ -289,8 +300,7 @@ class RepairCalculator {
                 <div class="rc-result-availability">
                     ${item.availability.in_stock
                         ? `✅ В наличии (${item.availability.quantity} шт.)`
-                        : `❌ Нет в наличии`
-                    }
+                        : `❌ Нет в наличии`}
                 </div>
                 <button class="rc-btn-add" onclick="calculator.addPart(${item.id})">
                     + Добавить
@@ -313,10 +323,11 @@ const calculator = new RepairCalculator();
 # Поиск по названию
 curl -i https://api.bm.parts/v2/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: YOUR_API_KEY" \
+  -H "User-Agent: RepairCalculatorWP/1.0" \
+  -H "Accept-Language: ru" \
   -d '{
     "query": "тормозные колодки",
-    "language_id": 2,
     "page": 1,
     "per_page": 10
   }'
@@ -324,7 +335,8 @@ curl -i https://api.bm.parts/v2/search \
 # Поиск по артикулу
 curl -i https://api.bm.parts/v2/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: YOUR_API_KEY" \
+  -H "User-Agent: RepairCalculatorWP/1.0" \
   -d '{
     "query": "04511-SDA-A01"
   }'
@@ -339,13 +351,18 @@ curl -i https://api.bm.parts/v2/search \
 | 3 | Поиск с пустым запросом | Ошибка 400 |
 | 4 | Поиск с query < 2 символов | Ошибка валидации |
 | 5 | Поиск несуществующей детали | Пустой список `items: []` |
+| 6 | Запрос без User-Agent | 403 Forbidden |
+| 7 | Запрос при превышении лимита | 403 + X-RateLimit-* заголовки |
 
 ---
 
 ## TODO
 
+- [x] Формат авторизации: `Authorization: API-КЛЮЧ` (без Bearer)
+- [x] Обязательный заголовок `User-Agent`
 - [x] Лимиты rate limiting (10 000/час авториз., 120/час неавториз.)
-- [ ] Уточнить формат авторизации (Bearer / API Key / другой)
+- [x] Пагинация: 30 элементов по умолчанию, до 100
+- [x] Локализация: `Accept-Language: ru` / `uk`
+- [ ] Уточнить точный URL эндпоинта поиска
 - [ ] Уточнить структуру ответа (поля, типы)
-- [ ] Уточнить language_id для русского языка
 - [ ] Протестировать с реальным API-ключом
