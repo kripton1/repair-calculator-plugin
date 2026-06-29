@@ -7,13 +7,8 @@
 ## HTTP Request
 
 ```
-POST {base_url}/search
+POST https://api.bm.parts/v2/search
 ```
-
-📌 **Уточнить:** Точный путь эндпоинта. Возможные варианты:
-- `POST /api/v2/search`
-- `POST /api/v2/parts/search`
-- `POST /api/v2/search/parts`
 
 ## Заголовки (Headers)
 
@@ -131,14 +126,28 @@ Authorization: Bearer {api_key}
 | `data.items[].availability.quantity` | integer | Количество на складе |
 | `data.items[].availability.delivery_days` | integer | Дни до доставки |
 
-### Ошибки
+### Обработка ошибок
 
 | Код | Ответ | Описание |
 |-----|-------|----------|
 | 400 | `{ "success": false, "error": "Invalid query parameter" }` | Невалидный запрос |
 | 401 | `{ "success": false, "error": "Unauthorized" }` | Невалидный API-ключ |
-| 429 | `{ "success": false, "error": "Rate limit exceeded" }` | Превышен лимит запросов |
+| 403 | `{ "message": "Превышен лимит запросов API для ..." }` | Rate limit — смотреть `X-RateLimit-Reset` |
+| 429 | `{ "success": false, "error": "Rate limit exceeded" }` | Лимит запросов |
 | 500 | `{ "success": false, "error": "Internal server error" }` | Ошибка сервера |
+
+### Rate Limit в реальном времени
+
+```php
+// Извлечение лимитов из заголовков ответа
+$headers = wp_remote_retrieve_headers($response);
+$remaining = $headers['x-ratelimit-remaining'] ?? null;
+$reset     = $headers['x-ratelimit-reset'] ?? null;
+
+if ($remaining !== null && $remaining < 100) {
+    error_log("BM Parts API: осталось {$remaining} запросов, сброс через {$reset}");
+}
+```
 
 ---
 
@@ -302,7 +311,7 @@ const calculator = new RepairCalculator();
 
 ```bash
 # Поиск по названию
-curl -X POST https://developer.bm.parts/api/v2/search \
+curl -i https://api.bm.parts/v2/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
@@ -313,7 +322,7 @@ curl -X POST https://developer.bm.parts/api/v2/search \
   }'
 
 # Поиск по артикулу
-curl -X POST https://developer.bm.parts/api/v2/search \
+curl -i https://api.bm.parts/v2/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
@@ -335,9 +344,8 @@ curl -X POST https://developer.bm.parts/api/v2/search \
 
 ## TODO
 
-- [ ] Уточнить точный URL эндпоинта поиска
+- [x] Лимиты rate limiting (10 000/час авториз., 120/час неавториз.)
 - [ ] Уточнить формат авторизации (Bearer / API Key / другой)
 - [ ] Уточнить структуру ответа (поля, типы)
 - [ ] Уточнить language_id для русского языка
-- [ ] Уточнить лимиты rate limiting
 - [ ] Протестировать с реальным API-ключом
